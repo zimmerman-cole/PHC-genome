@@ -1,0 +1,7 @@
+GENE_FASTA*
+.ipynb_checkpoints/
+data/
+HGDP/
+*.pyc
+*.swp
+*.swo

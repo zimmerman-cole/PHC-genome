@@ -2,6 +2,8 @@ GENE_FASTA*
 GENE FASTA.ipynb
 .ipynb_checkpoints/
 data/
+data_fragments.zip
+full_cleaned_data.csv
 HGDP/
 *.pyc
 *.swp

@@ -109,13 +109,17 @@ class BetaPriorMC(BinomialModel):
         self.beta = beta
         self.num_samples = num_samples
         
-    def log_marginal_likelihood(self, X):
+    def log_marginal_likelihood(self, X, include_MLE=False):
         if len(X.shape) == 1:
             X = X.reshape(1, -1)
             
         sampled_params = np.random.beta(
             self.alpha, self.beta, size=(self.num_samples, X.shape[1])
         )
+        if include_MLE:
+            theta_MLE = (X.mean(axis=0) / 2.).reshape(1, -1)
+            sampled_params = np.vstack([sampled_params, theta_MLE])
+        
         log_priors = np.log(
             beta_dist.pdf(sampled_params, self.alpha, self.beta)
         ).sum(axis=1)
@@ -146,6 +150,9 @@ class BinomialMLE(BinomialModel):
         pass
     
     def log_marginal_likelihood(self, X, eps=1e-5):
+        if len(X.shape) == 1:
+            X = X.reshape(1, -1)
+            
         theta_MLE = X.mean(axis=0) / 2.
         
         # smooth theta_MLE, so it has no parameters exactly equal to 0 or 1
@@ -163,13 +170,23 @@ class BinomialMLE(BinomialModel):
         return out
     
     
+class BinomialExperimental(BinomialModel):
     
+    def __init__(self):
+        pass
     
+    def log_marginal_likelihood(self, X):
+        if len(X.shape) == 1:
+            X = X.reshape(1, -1)
+        N, M = X.shape
+        
+        theta_MLE = (X.mean(axis=0) / 2.).reshape(1, M)
     
+        theta_hlf = np.array([0.5]*M).reshape(1, M)
     
+        theta = np.vstack([theta_MLE, theta_hlf])
     
-    
-    
+        return self.log_likelihood(X, theta).mean()
     
     
     

@@ -63,9 +63,42 @@ class Leaf(Node):
         
         self.log_pr_data_tk = self.log_pr_data_h1
         self.log_rk = 0.             # pi_k P(D_k | H_1^k) / pi_k P(D_k | H_1^k) = 1; log(1) = 0
+
+        
+class CandidateSet(object):
+    
+    def __init__(self, candidate_dict):
+        self.candidates = candidate_dict
+        
+    def get_best_candidate(self):
+        """
+        Returns new_node, (left_child, right_child) with the highest log_rk.
+        """
+        return = max(self.candidates.items(), key=lambda itm: itm[0].log_rk)
+    
+    def prune(self, node):
+        """
+        Removes any entries {parent: (left, right)} where node == left or node == right. 
+        """
+        to_delete = []
+        for parent, (left, right) in self.candidates.items():
+            if (node == left) or (node == right):
+                to_delete.append(parent)
+                
+        for n in to_delete:
+            del self.candidates[n]
+            
+    def keys(self):
+        return list(self.candidates.keys())
+    
+    def add(self, key, value):
+        self.candidates[key] = value
         
                 
 class BHC(object):
+    """
+    TODO: doc
+    """
     
     def __init__(self, data, alpha, model, indices=None):
         self.data = data
@@ -115,7 +148,43 @@ class BHC(object):
             i += 1
             
         self.root = new_node
+     
+    def build_tree2(self, inner_hooks=list(), outer_hooks=list()):
+        to_merge = self.leaves.copy()
         
+        i = 0
+        # Set up initial set of candidates (each with n_k=2 data points)
+        candidates = dict()
+        for j, (node1, node2) in enumerate(itertools.combinations(to_merge, 2)):
+            node = self._merge(node1, node2)
+            candidates[node] = (node1, node2)
+        candidate_set = CandidateSet(candidates)
+        
+        while len(to_merge) > 1:
+            best = candidate_set.get_best_candidate()
+            new_node, (left, right) = best
+            self.nodes.append(new_node)    
+            candidate_set.prune(left)   # prune any candidates that have left or right as a child
+            candidate_set.prune(right)
+            
+            to_merge.remove(left)
+            to_merge.remove(right)
+            for j, node in enumerate(to_merge):
+                new_candidate = self._merge(new_node, node)
+                candidate_set.add(new_candidate, (new_node, node))
+                
+                for hook in inner_hooks:
+                    hook(new_candidate, new_node, node, j)
+                    
+            to_merge.append(new_node)
+            
+            for hook in outer_hooks:
+                hook(new_node, left, right, i)
+                
+            i += 1
+            
+        self.root = new_node
+    
     def _merge(self, left, right):
         data = np.vstack([self.data[left.row_idx], self.data[right.row_idx]])
         row_idx = left.row_idx + right.row_idx

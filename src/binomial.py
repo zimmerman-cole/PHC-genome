@@ -8,13 +8,12 @@ import numpy as np
 from scipy.special import comb, gammaln, logsumexp
 from scipy.stats import beta as beta_dist
 
+
 class BinomialModel(ABC):
-    
     """
     Base class for a binomial-based model of P(D_k | H_1^k), i.e. the (marginal) probability 
       that data D_k was generated from a single cluster, with binomial parameters theta 
       marginalized away.
-    
     """
     
     def __init__(self):

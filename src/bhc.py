@@ -12,10 +12,14 @@ from .utils import is_iterable
 
 class Node(object):
     
+    """
+    TODO: doc
+    """
+    
     def __init__(
-        self, data, alpha, model, left_child=None, right_child=None, index=None,
+        self, data, row_idx, alpha, model, left_child=None, right_child=None, index=None
     ):
-        self.data = data
+        self.row_idx = row_idx
         self.N = data.shape[0]
         self.alpha = alpha
         self.log_alpha = np.log(alpha)
@@ -45,25 +49,14 @@ class Node(object):
             )
             
             self.log_rk = post_pr_h1 - self.log_pr_data_tk 
-            
-    @classmethod
-    def merge(cls, left_child, right_child):
-        assert left_child.alpha == right_child.alpha
-        assert left_child.model == right_child.model
-        
-        data = np.vstack([left_child.data, right_child.data])
-        index = frozenset().union(left_child.index, right_child.index)
-        return cls(
-            data, left_child.alpha, left_child.model, left_child, right_child, index
-        )
 
 
 class Leaf(Node):
     
-    def __init__(self, data, alpha, model, index=None):
+    def __init__(self, data, row_idx, alpha, model, index=None):
         if not is_iterable(index):
             index = [index]
-        super(Leaf, self).__init__(data, alpha, model, None, None, index)
+        super(Leaf, self).__init__(data, row_idx, alpha, model, None, None, index)
         
         self.log_d = self.log_alpha
         self.log_pi = 0.             # log(1)
@@ -75,6 +68,7 @@ class Leaf(Node):
 class BHC(object):
     
     def __init__(self, data, alpha, model, indices=None):
+        self.data = data
         self.alpha = alpha
         self.model = model
         self.N = data.shape[0]
@@ -82,16 +76,18 @@ class BHC(object):
         if indices is None:
             indices = list(range(data.shape[0]))
         else:
-            assert is_iterable(indices) and len(indices) == self.N
+            assert is_iterable(indices), "Data indices need to be array-like."
+            msg = "len(indices) (%d) != len(data) (%d)." % (len(indices), self.N)
+            assert len(indices) == self.N, msg
         
-        self.nodes = dict()
+        self.nodes = []
         self.leaves = []
         self.root = None
         
-        for idx, data_point in zip(indices, data):
-            leaf = Leaf(data_point, alpha, model, frozenset([idx]))
+        for i, (idx, data_point) in enumerate(zip(indices, data)):
+            leaf = Leaf(data_point, [i], alpha, model, [idx])
             self.leaves.append(leaf)
-            self.nodes[idx] = leaf
+            self.nodes.append(leaf)
             
     def build_tree(self, inner_hooks=list(), outer_hooks=list()):
         to_merge = self.leaves.copy()
@@ -100,7 +96,7 @@ class BHC(object):
         while len(to_merge) > 1:
             candidates = dict()
             for j, (node1, node2) in enumerate(itertools.combinations(to_merge, 2)):
-                node = Node.merge(node1, node2)
+                node = self._merge(node1, node2)
                 candidates[node] = (node.log_rk, node1, node2)
                 
                 for hook in inner_hooks:
@@ -108,7 +104,7 @@ class BHC(object):
                 
             best = sorted(candidates.items(), key=lambda itm: itm[1][0])[-1]
             new_node, (log_rk, left, right) = best
-            self.nodes[new_node.index] = new_node    
+            self.nodes.append(new_node)    
             to_merge.remove(left)
             to_merge.remove(right)
             to_merge.append(new_node)
@@ -119,6 +115,15 @@ class BHC(object):
             i += 1
             
         self.root = new_node
+        
+    def _merge(self, left, right):
+        data = np.vstack([self.data[left.row_idx], self.data[right.row_idx]])
+        row_idx = left.row_idx + right.row_idx
+        index = left.index + right.index
+        return Node(
+            data, row_idx, self.alpha, self.model, left, right, index
+        )
+        
   
         
         

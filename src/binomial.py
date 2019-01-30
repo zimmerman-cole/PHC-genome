@@ -7,13 +7,18 @@ import warnings
 import numpy as np
 from scipy.special import comb, gammaln, logsumexp
 from scipy.stats import beta as beta_dist
+from scipy.stats import norm as norm_dist
 
 
 class BinomialModel(ABC):
     """
     Base class for a binomial-based model of P(D_k | H_1^k), i.e. the (marginal) probability 
       that data D_k was generated from a single cluster, with binomial parameters theta 
-      marginalized away.
+      marginalized away:
+        P(D_k | H_1^k) = \int P(D_k | theta) P(theta | beta) dtheta, 
+      where beta are the hyperparameters. 
+      
+    A BinomialModel can also simply approximate this quantity, if desired.
     """
     
     def __init__(self):
@@ -34,6 +39,7 @@ class BinomialModel(ABC):
         
         C = np.log(comb(N=2, k=data)).sum()
         
+        
         # check for any theta that equal 0 or 1, add/subtract a small constant
         # (to avoid log(0) errors)
         idx = np.argwhere(np.isclose(theta, 0))
@@ -52,6 +58,11 @@ class BinomialModel(ABC):
             warnings.filterwarnings('default')
         
         return C + T1 + T2
+    
+    def _reshape(self, X):
+        if len(X.shape) == 1:
+            X = X.reshape(1, -1)
+        return X
     
     @abstractmethod
     def log_marginal_likelihood(self, *args, **kwargs):
@@ -87,6 +98,7 @@ class BetaBinomial(BinomialModel):
         """
         TODO: doc
         """
+        X = self._reshape(X)
         alpha, beta, n = self.alpha, self.beta, self.n
         
         # terms that are NOT constant w.r.t. X
@@ -104,41 +116,47 @@ class BetaPriorMC(BinomialModel):
     Sampled theta are drawn from a beta distribution.
     """
     
-    def __init__(self, alpha, beta, num_samples=10000):
+    def __init__(self, alpha, beta, num_samples=10000, num_trials=10):
+        super(BetaPriorMC, self).__init__()
         self.alpha = alpha
         self.beta = beta
         self.num_samples = num_samples
         
     def log_marginal_likelihood(self, X, include_MLE=False):
-        if len(X.shape) == 1:
-            X = X.reshape(1, -1)
-            
-        sampled_params = np.random.beta(
-            self.alpha, self.beta, size=(self.num_samples, X.shape[1])
-        )
-        if include_MLE:
-            theta_MLE = (X.mean(axis=0) / 2.).reshape(1, -1)
-            sampled_params = np.vstack([sampled_params, theta_MLE])
+        X = self._reshape(X)
         
-        log_priors = np.log(
-            beta_dist.pdf(sampled_params, self.alpha, self.beta)
-        ).sum(axis=1)
-        log_priors -= log_priors.max()
+        log_ps = []
+        for t in range(num_trials):
+            sampled_params = np.random.beta(
+                self.alpha, self.beta, size=(self.num_samples, X.shape[1])
+            )
+            if include_MLE:
+                theta_MLE = (X.mean(axis=0) / 2.).reshape(1, -1)
+                sampled_params = np.vstack([sampled_params, theta_MLE])
 
-        log_liks = self.log_likelihood(X, sampled_params)
+            log_priors = np.log(
+                beta_dist.pdf(sampled_params, self.alpha, self.beta)
+            ).sum(axis=1)
+            log_priors -= log_priors.max()  # normalize
+
+            log_liks = self.log_likelihood(X, sampled_params)
+
+            # log of unnormalized posterior probabilities
+            # p(X | theta) p(theta | alpha, beta)
+            log_posts = log_priors + log_liks
+
+            lml = logsumexp(log_posts)
+            log_ps.append(lml)
+            
+        lml = -np.log(num_trials) + logsumexp(log_ps)
         
-        # log of unnormalized posterior probabilities
-        # p(X | theta) p(theta | alpha, beta)
-        log_posts = log_priors + log_liks
-        
-        lml = logsumexp(log_posts)
         return lml
 
 
 class BinomialMLE(BinomialModel):
     
     """
-    Approximates P(D_k | H_1^k) = \int P(D_k | theta) P(theta | beta) dtheta
+    'Approximates' P(D_k | H_1^k) = \int P(D_k | theta) P(theta | beta) dtheta
     by just using the maximum likelihood estimate (MLE) of theta.
     
     WARNING: using this model often results in undesirable behaviour during the early stages 
@@ -147,7 +165,7 @@ class BinomialMLE(BinomialModel):
     """
     
     def __init__(self):
-        pass
+        super(BinomialMLE, self).__init__()
     
     def log_marginal_likelihood(self, X, eps=1e-5):
         if len(X.shape) == 1:
@@ -161,10 +179,14 @@ class BinomialMLE(BinomialModel):
         ix1 = np.argwhere(np.isclose(theta_MLE, 1.))
         theta_MLE[ix1] -= eps
         
-        C = np.log(comb(N=2, k=X)).sum()
+        C = np.log(comb(N=2, k=X))
         
         T1 = X * np.log(theta_MLE)
         T2 = (2 - X) * np.log(1 - theta_MLE)
+        
+#         print(C.sum(), T1.sum(), T2.sum())
+#         print((C + T1 + T2).sum())
+#         input()
         
         out = (C + T1 + T2).sum()
         return out
@@ -172,8 +194,10 @@ class BinomialMLE(BinomialModel):
     
 class BinomialExperimental(BinomialModel):
     
-    def __init__(self):
-        pass
+    def __init__(self, full_data, C=0.1):
+        self.C = C
+        self.theta_MLE_full = (full_data.mean(axis=0) / 2.).reshape(1, -1)
+        self.log2 = np.log(2.)
     
     def log_marginal_likelihood(self, X):
         if len(X.shape) == 1:
@@ -182,11 +206,19 @@ class BinomialExperimental(BinomialModel):
         
         theta_MLE = (X.mean(axis=0) / 2.).reshape(1, M)
     
-        theta_hlf = np.array([0.5]*M).reshape(1, M)
-    
-        theta = np.vstack([theta_MLE, theta_hlf])
-    
-        return self.log_likelihood(X, theta).mean()
+        if not np.isclose(self.C, 0):
+            theta = np.vstack([theta_MLE, self.theta_MLE_full])
+
+            w_MLE = N / (N + self.C)
+            w_FLL = 1 - w_MLE
+
+            lml_MLE, lml_FLL = self.log_likelihood(X, theta)
+
+            out = np.logaddexp(np.log(w_MLE) + lml_MLE, np.log(w_FLL) + lml_FLL)
+
+            return out - self.log2
+        else:
+            return self.log_likelihood(X, theta_MLE)
     
     
     
